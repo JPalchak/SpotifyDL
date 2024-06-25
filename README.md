@@ -1,4 +1,4 @@
-# SpotiDL Readme
+
 
 <div align="center">
   <img src="media.png" alt="SpotiDL Logo">
@@ -11,6 +11,8 @@
 
 
 Welcome to SpotiDL, a powerful and user-friendly software program designed to enhance your Spotify experience by allowing you to download playlists and songs with ease. Whether you want to enjoy your favorite music offline or maintain a personal collection, SpotiDL has got you covered.
+# SpotiDL Windows program preview
+![image](https://github.com/OmiiiDev/SpotifyDL/assets/103533638/2ee982ad-9f13-4846-9ece-4c3624a56ece)
 
 ## Connect on Discord for support and try out my own custom SpotiDL Discord bot! [Discord Server](https://discord.gg/dG2gdxWHJp)
 
