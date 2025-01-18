@@ -36,6 +36,7 @@ Join our vibrant Discord community to unlock the complete potential of SpotiDL, 
 - Downloads music with metadata
 - Queue System
 - Music quality 320k
+#### DISCORD BOT COMMANDS ARE NOW `/song` & `/playlist`
 
 [view all features](https://sites.google.com/view/spotidownloader/home#h.7po3tvbei5y)
 
