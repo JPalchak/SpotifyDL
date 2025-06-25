@@ -14,6 +14,7 @@ Welcome to SpotiDL, a powerful and user-friendly software program designed to en
 # SpotiDL Windows program preview
 ![image](https://github.com/OmiiiDev/SpotifyDL/assets/103533638/2ee982ad-9f13-4846-9ece-4c3624a56ece)
 
+# DISCORD BOT IS DISCONTINUED (FOR NOW)
 ## Connect on Discord for support and try out my own custom SpotiDL Discord bot! [Discord Server](https://discord.gg/dG2gdxWHJp)
 
 Join our vibrant Discord community to unlock the complete potential of SpotiDL, including a powerful Discord bot that can download songs and playlists! Engage with fellow users, discover more software offerings, and access dedicated support for any troubleshooting or bug-related queries.
