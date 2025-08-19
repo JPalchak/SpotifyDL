@@ -5,11 +5,13 @@ import threading
 import subprocess
 import json
 import datetime
+import urllib.request
+import platform
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLabel, QLineEdit, QProgressBar, QTextEdit, 
                             QFileDialog, QMessageBox, QTabWidget, QComboBox, QSlider,
                             QCheckBox, QSpinBox, QGroupBox, QRadioButton, QSplitter,
-                            QListWidget, QListWidgetItem)
+                            QListWidget, QListWidgetItem, QDialog)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QDesktopServices
 
@@ -36,7 +38,7 @@ class DownloadWorker(QThread):
         original_dir = os.getcwd()
         os.chdir(self.download_path)
 
-        # Get executable paths --> try multiple methods to find them
+        # Get executable paths - try multiple methods to find them
         script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         current_dir = os.getcwd()
         
@@ -493,7 +495,7 @@ class SpotifyDownloaderApp(QMainWindow):
         about_label.setStyleSheet("color: #1DB954;")
         about_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        version_label = QLabel("Version 1.6.1.1 BETA")
+        version_label = QLabel("Version 1.6.2 BETA")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         description = QLabel(
@@ -702,8 +704,144 @@ class SpotifyDownloaderApp(QMainWindow):
             self.update_console(f"Error saving settings: {e}")
 
 
+class LoadingDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Checking for Updates")
+        self.setFixedSize(400, 120)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        self.label = QLabel("Checking for spotDL updates...")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setFont(QFont("Arial", 12))
+        layout.addWidget(self.label)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(4)
+        layout.addWidget(self.progress_bar)
+        
+        self.setLayout(layout)
+        
+        # Enhanced style for modern look
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #121212;
+                color: #FFFFFF;
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QProgressBar {
+                background-color: #282828;
+                border: none;
+                border-radius: 2px;
+                height: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                                  stop:0 #1DB954, stop:1 #1ED760);
+                border-radius: 2px;
+            }
+        """)
+
+
+class UpdateWorker(QThread):
+    update_status = pyqtSignal(str)
+    update_progress = pyqtSignal(int)
+    start_progress = pyqtSignal()
+    finished = pyqtSignal()
+
+    def run(self):
+        try:
+            # Find spotdl.exe path
+            spotdl_dir = os.path.abspath(os.path.dirname(__file__))
+            spotdl_path = os.path.join(spotdl_dir, 'spotdl.exe')
+            
+            if not os.path.exists(spotdl_path):
+                self.finished.emit()
+                return
+            
+            # Get current version
+            output = subprocess.check_output([spotdl_path, "--version"]).decode().strip()
+            current_version = output.split()[-1]  # always take last token
+
+            
+            # Get latest release info
+            req = urllib.request.Request("https://api.github.com/repos/spotdl/spotify-downloader/releases/latest")
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+            
+            latest_tag = data['tag_name'].lstrip('v')
+            
+            def version_tuple(v):
+                return tuple(map(int, v.split('.')))
+            
+            if version_tuple(latest_tag) > version_tuple(current_version):
+                self.update_status.emit("Downloading spotDL update...")
+                
+                # Determine architecture
+                asset_name = f"spotdl-{latest_tag}-win32.exe"
+                
+                # Find the asset
+                download_url = None
+                for asset in data['assets']:
+                    if asset['name'] == asset_name:
+                        download_url = asset['browser_download_url']
+                        break
+                
+                if download_url:
+                    self.start_progress.emit()
+                    req = urllib.request.Request(download_url)
+                    with urllib.request.urlopen(req) as response:
+                        total_size = int(response.headers.get('Content-Length', 0))
+                        block_size = 1024
+                        downloaded = 0
+                        temp_path = spotdl_path + '.new'
+                        with open(temp_path, 'wb') as file:
+                            while True:
+                                chunk = response.read(block_size)
+                                if not chunk:
+                                    break
+                                file.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = int((downloaded / total_size) * 100)
+                                    self.update_progress.emit(progress)
+                    
+                    os.remove(spotdl_path)
+                    os.rename(temp_path, spotdl_path)
+        except Exception as e:
+            # Silently fail
+            pass
+        
+        self.finished.emit()
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = SpotifyDownloaderApp()
-    window.show()
+    
+    loading = LoadingDialog()
+    loading.show()
+    
+    worker = UpdateWorker()
+    worker.update_status.connect(loading.label.setText)
+    worker.update_progress.connect(loading.progress_bar.setValue)
+    worker.start_progress.connect(lambda: loading.progress_bar.setMaximum(100))
+    
+    def on_finished():
+        loading.close()
+        window = SpotifyDownloaderApp()
+        window.show()
+    
+    worker.finished.connect(on_finished)
+    worker.start()
+    
     sys.exit(app.exec())
