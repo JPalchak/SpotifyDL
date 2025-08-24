@@ -43,13 +43,22 @@ class DownloadWorker(QThread):
         current_dir = os.getcwd()
         
         # Get locations for ffmpeg and spotdl (for portable version)
+        script_folder = app_base_dir()
         possible_ffmpeg_paths = [
-            os.path.join(os.path.abspath(os.path.dirname(__file__)), 'ffmpeg.exe')
+            os.path.join(script_folder, 'ffmpeg.exe')
         ]
+        # Also check PATH as a fallback
+        ffmpeg_in_path = shutil.which('ffmpeg') or shutil.which('ffmpeg.exe')
+        if ffmpeg_in_path:
+            possible_ffmpeg_paths.append(ffmpeg_in_path)
         
         possible_spotdl_paths = [
-            os.path.join(os.path.abspath(os.path.dirname(__file__)), 'spotdl.exe')
+            os.path.join(script_folder, 'spotdl.exe')
         ]
+        # Also check PATH as a fallback
+        spotdl_in_path = shutil.which('spotdl') or shutil.which('spotdl.exe')
+        if spotdl_in_path:
+            possible_spotdl_paths.append(spotdl_in_path)
         
         # Find ffmpeg
         ffmpeg_path = None
@@ -92,7 +101,8 @@ class DownloadWorker(QThread):
             current_track = 0
             downloaded_tracks = []
             
-            for line in process.stdout:
+            stdout_iter = process.stdout or []
+            for line in stdout_iter:
                 # Only show relevant download information, not debug info
                 if "Downloading" in line or "Found" in line or "Downloaded" in line or "Error" in line:
                     self.update_console.emit(line.strip())
@@ -135,8 +145,8 @@ class SpotifyDownloaderApp(QMainWindow):
         self.setWindowTitle("Spotify Downloader Pro")
         self.setMinimumSize(800, 700)
         
-        # Create app data directory in %APPDATA%
-        self.app_data_dir = os.path.join(os.getenv('APPDATA'), "SpotifyDownloaderPro")
+        # Create app data directory (Windows: %APPDATA%, others: ~/.config)
+        self.app_data_dir = self._resolve_app_data_dir()
         if not os.path.exists(self.app_data_dir):
             os.makedirs(self.app_data_dir)
         
@@ -762,7 +772,7 @@ class UpdateWorker(QThread):
     def run(self):
         try:
             # Find spotdl.exe path
-            spotdl_dir = os.path.abspath(os.path.dirname(__file__))
+            spotdl_dir = app_base_dir()
             spotdl_path = os.path.join(spotdl_dir, 'spotdl.exe')
             
             if not os.path.exists(spotdl_path):
@@ -773,36 +783,60 @@ class UpdateWorker(QThread):
             output = subprocess.check_output([spotdl_path, "--version"]).decode().strip()
             current_version = output.split()[-1]  # always take last token
 
-            
-            # Get latest release info
-            req = urllib.request.Request("https://api.github.com/repos/spotdl/spotify-downloader/releases/latest")
-            with urllib.request.urlopen(req) as response:
+            # Get latest release info (with UA and timeout)
+            headers = {"User-Agent": "SpotifyDownloaderPro/1.6 (+https://github.com/OmiiiDev/SpotifyDL)"}
+            req = urllib.request.Request(
+                "https://api.github.com/repos/spotdl/spotify-downloader/releases/latest",
+                headers=headers,
+            )
+            with urllib.request.urlopen(req, timeout=15) as response:
                 data = json.loads(response.read().decode())
             
-            latest_tag = data['tag_name'].lstrip('v')
+            latest_tag = data.get('tag_name', '').lstrip('v')
             
-            def version_tuple(v):
-                return tuple(map(int, v.split('.')))
+            def version_tuple(v: str):
+                # Safe parse version numbers like '1.2.3' (ignore non-numeric suffixes)
+                parts = []
+                for p in v.split('.'):
+                    num = ''.join(ch for ch in p if ch.isdigit())
+                    parts.append(int(num) if num else 0)
+                return tuple(parts)
             
-            if version_tuple(latest_tag) > version_tuple(current_version):
+            if latest_tag and version_tuple(latest_tag) > version_tuple(current_version):
                 self.update_status.emit("Downloading spotDL update...")
                 
-                # Determine architecture
-                asset_name = f"spotdl-{latest_tag}-win32.exe"
-                
-                # Find the asset
+                # Choose the best asset for the current platform/arch
+                arch = platform.machine().lower()
+                preferred_tokens = []
+                if 'arm' in arch:
+                    preferred_tokens = ['arm64', 'aarch64']
+                elif '64' in arch or arch in ('amd64', 'x86_64'):
+                    preferred_tokens = ['x64', 'amd64', 'win64']
+                else:
+                    preferred_tokens = ['win32', 'x86']
+
+                assets = data.get('assets', [])
                 download_url = None
-                for asset in data['assets']:
-                    if asset['name'] == asset_name:
-                        download_url = asset['browser_download_url']
+                # First pass: prefer matching arch tokens
+                for asset in assets:
+                    name = asset.get('name', '').lower()
+                    if name.endswith('.exe') and 'spotdl' in name and 'win' in name and any(t in name for t in preferred_tokens):
+                        download_url = asset.get('browser_download_url')
                         break
+                # Fallback: exact legacy naming
+                if not download_url:
+                    legacy_name = f"spotdl-{latest_tag}-win32.exe"
+                    for asset in assets:
+                        if asset.get('name') == legacy_name:
+                            download_url = asset.get('browser_download_url')
+                            break
                 
                 if download_url:
                     self.start_progress.emit()
-                    req = urllib.request.Request(download_url)
-                    with urllib.request.urlopen(req) as response:
+                    req = urllib.request.Request(download_url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as response:
                         total_size = int(response.headers.get('Content-Length', 0))
-                        block_size = 1024
+                        block_size = 1024 * 64
                         downloaded = 0
                         temp_path = spotdl_path + '.new'
                         with open(temp_path, 'wb') as file:
@@ -815,11 +849,20 @@ class UpdateWorker(QThread):
                                 if total_size > 0:
                                     progress = int((downloaded / total_size) * 100)
                                     self.update_progress.emit(progress)
-                    
-                    os.remove(spotdl_path)
-                    os.rename(temp_path, spotdl_path)
-        except Exception as e:
-            # Silently fail
+                        # Replace atomically when possible
+                        try:
+                            os.replace(temp_path, spotdl_path)
+                        except Exception:
+                            # Fallback to remove+rename
+                            if os.path.exists(spotdl_path):
+                                try:
+                                    os.remove(spotdl_path)
+                                except Exception:
+                                    pass
+                            if os.path.exists(temp_path):
+                                os.rename(temp_path, spotdl_path)
+        except Exception:
+            # Silently fail (keep existing binary)
             pass
         
         self.finished.emit()
